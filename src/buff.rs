@@ -2,7 +2,7 @@
 
 use crate::err::RecvError;
 use crate::message::Key;
-use crate::unwrap_some_or;
+use crate::{unwrap_ok_or, unwrap_some_or};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -15,6 +15,7 @@ use std::collections::LinkedList;
 type BuffType<T> = LinkedList<T>;
 #[cfg(not(feature = "list"))]
 use std::collections::VecDeque;
+use std::rc::Rc;
 #[cfg(not(feature = "list"))]
 /// actual buffer type
 type BuffType<T> = VecDeque<T>;
@@ -22,63 +23,63 @@ type BuffType<T> = VecDeque<T>;
 /// A fixed size buff
 #[derive(Debug)]
 pub(crate) struct KeyedBuff<T: BuffMessage> {
-    /// FIFO queue buff
-    buff: BuffType<T>,
+    /// FIFO queue buff, store msgs that without conflitc
+    ready: BuffType<T>,
+    /// msgs that conflict with that key
+    pending_on_key: HashMap<<T as BuffMessage>::Key, Vec<Rc<T>>>,
     /// capacity of buff
     cap: usize,
-    /// keys is current active key, value point to first msg
-    /// in buff that conflict with that key, cap means None
-    activate_keys: HashMap<<T as BuffMessage>::Key, usize>,
-    /// curr scan start position
-    curr: usize,
+    /// size of buff now
+    size: usize,
 }
 
 impl<T: BuffMessage> KeyedBuff<T> {
     /// new a buff with cap
     pub(crate) fn new(cap: usize) -> Self {
         KeyedBuff {
-            buff: BuffType::new(),
+            ready: BuffType::with_capacity(cap),
+            pending_on_key: HashMap::with_capacity(cap),
             cap,
-            activate_keys: HashMap::with_capacity(cap),
-            curr: 0,
+            size: 0,
         }
     }
 
     /// push back to buff
     pub(crate) fn push_back(&mut self, m: T) {
-        self.buff.push_back(m);
+        let size = unwrap_some_or!(self.size.checked_add(1), panic!("fatal error"));
+        self.size = size;
+        let keys = m.get_owned_keys();
+        let mut pending = false;
+        let msg = Rc::new(m);
+        for k in keys {
+            if let Some(pendings) = self.pending_on_key.get_mut(&k) {
+                pending = true;
+                pendings.push(Rc::clone(&msg));
+            } else {
+                let _drop = self.pending_on_key.insert(k, vec![]);
+            }
+        }
+        if !pending {
+            let inner_msg = unwrap_ok_or!(
+                Rc::try_unwrap(msg),
+                _,
+                panic!("there should be only on ref")
+            );
+            self.ready.push_back(inner_msg);
+        }
     }
 
     /// pop an unconflict message as front as possible
     pub(crate) fn pop_unconflict_front(&mut self) -> Result<T, RecvError> {
-        let mut index: usize = self.curr;
-        for msg in self.buff.iter().skip(index) {
-            if let Some(conflict_keys) = msg.conflict_keys(&self.activate_keys) {
-                for key in conflict_keys {
-                    if let Some(v) = self.activate_keys.get_mut(key) {
-                        if index < *v {
-                            *v = index;
-                        }
-                    }
-                }
-            } else {
-                break;
-            }
-            let new_index = unwrap_some_or!(index.checked_add(1), panic!("fatal error"));
-            index = new_index;
-        }
-        self.curr = index;
-        if index >= self.buff.len() {
+        if self.ready.is_empty() && self.size != 0 {
             Err(RecvError::AllConflict)
         } else {
             #[cfg(not(feature = "list"))]
-            let msg = unwrap_some_or!(self.buff.remove(index), panic!("fatal error"));
+            let msg = unwrap_some_or!(self.ready.pop_front(), panic!("fatal error"));
             #[cfg(feature = "list")]
             let msg = self.buff.remove(index);
-
-            for key in msg.get_owned_keys() {
-                let _ = self.activate_keys.insert(key, self.cap);
-            }
+            let size = unwrap_some_or!(self.size.checked_sub(1), panic!("fatal error"));
+            self.size = size;
             Ok(msg)
         }
     }
@@ -89,22 +90,32 @@ impl<T: BuffMessage> KeyedBuff<T> {
         <T as BuffMessage>::Key: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(index) = self.activate_keys.remove(key) {
-            if index < self.cap && index < self.curr {
-                // point to the first msg that conflict with that key
-                self.curr = index;
+        if let Some(pending_msgs) = self.pending_on_key.get_mut(key) {
+            if !pending_msgs.is_empty() {
+                let first = pending_msgs.remove(0);
+                if Rc::strong_count(&first) == 1 {
+                    let msg = unwrap_ok_or!(
+                        Rc::try_unwrap(first),
+                        _,
+                        panic!("there should be only on ref")
+                    );
+                    self.ready.push_back(msg);
+                }
+            }
+            if pending_msgs.is_empty() {
+                let _drop = self.pending_on_key.remove(key);
             }
         }
     }
 
     /// is buffer full
     pub(crate) fn is_full(&self) -> bool {
-        self.buff.len() == self.cap
+        self.size == self.cap
     }
 
     /// is buffer empty
     pub(crate) fn is_empty(&self) -> bool {
-        self.buff.len() == 0
+        self.size == 0
     }
 }
 

@@ -510,3 +510,52 @@ wait count 5, try_recv cost time 1.1262019s
 ```
 
 The result shows that the wait count is just 5 both, while the number of times `recv` has been called is 8000000. When comparing the two, the former is not worth mentioning. But there is still an obvious difference in the time consumption of `try_recv` between them, what's more, the difference between runtime of `try_recv` is almost the same with difference between total runtime. I suspect this may be due to the `SeqCst` memory order used by `Notify`, which affects the efficiency of shared state locking. 
+
+
+## Final Optimization
+
+```rust
+/// A fixed size buff
+#[derive(Debug)]
+pub(crate) struct KeyedBuff<T: BuffMessage> {
+    /// FIFO queue buff, store msgs that without conflitc
+    ready: BuffType<T>,
+    /// msgs that conflict with that key
+    pending_on_key: HashMap<<T as BuffMessage>::Key, Vec<Rc<T>>>,
+    /// capacity of buff
+    cap: usize,
+    /// size of buff now
+    size: usize,
+}
+```
+
+When push_back new msg, if the msg's keys are conflict with a key in `pending_on_key`, then push the msg into `Vec<Rc<T>>` corrosponding to that key, else just record it's keys in `pending_on_key`, then push it into `ready`.
+When recv, just `pop_front` ready.
+When drop a msg, for each key of it,  remove the fisrt Rc<Msg> pending on it, if the Rc's ref count is 1, push it to `ready`.
+
+constructing a bench(async_with_conflict) with extremely large number of conflicts.
+
+before doing optimiztion(on dev branch), the result is:
+```bash
+Benchmarking async send_recv/async kv_mpsc with conflict: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 303.1s, or reduce sample count to 10.
+async send_recv/async kv_mpsc with conflict
+                        time:   [2.9468 s 2.9993 s 3.0562 s]
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) low mild
+  1 (1.00%) high mild
+  3 (3.00%) high severe
+```
+
+after doing optimiztion, the result is:
+```bash
+Benchmarking async send_recv/async kv_mpsc with conflict: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 20.4s, or reduce sample count to 20.
+async send_recv/async kv_mpsc with conflict
+                        time:   [201.71 ms 202.84 ms 204.11 ms]
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) high mild
+  4 (4.00%) high severe
+```
+
+There is a 14 times difference between the two.
