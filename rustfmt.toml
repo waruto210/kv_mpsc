@@ -1,0 +1,6 @@
+# Nightly
+edition = "2021"
+chain_width = 48
+max_width = 90
+use_small_heuristics = "Max"
+fn_args_layout = "Compressed"

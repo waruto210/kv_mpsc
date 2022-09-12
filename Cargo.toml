@@ -1,0 +1,26 @@
+[package]
+name = "kv_mpsc"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/waruto210/kv_mpsc"
+description = "A multiple producer single consumer queue for support message with key(s)"
+license = "MIT"
+readme = "README.md"
+keywords = ["mpsc", "channel"]
+categories = ["concurrency"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+
+[features]
+list = []
+
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "send_recv"
+harness = false
