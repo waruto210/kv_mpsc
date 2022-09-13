@@ -1,7 +1,7 @@
 //! A message contains mutiple keys and single value
 
-use crate::shared::Shared;
 use crate::unwrap_ok_or;
+use crate::Shared;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -9,9 +9,9 @@ use std::iter::FromIterator;
 use std::sync::Arc;
 
 /// Trait bound for the message key
-pub trait Key: Eq + Hash + Clone {}
+pub trait Key: Eq + Hash + Clone + Debug {}
 
-impl<T: Eq + Hash + Clone> Key for T {}
+impl<T: Eq + Hash + Clone + Debug> Key for T {}
 
 /// Key of a message
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +114,12 @@ impl<K: Key, V> Message<K, V> {
         Message { key: KeySet::Multiple(HashSet::from_iter(keys)), value, shared: None }
     }
 
+    /// new a single key message
+    #[inline]
+    pub fn single_key(key: K, value: V) -> Self {
+        Message { key: KeySet::Single(key), value, shared: None }
+    }
+
     /// set the share queue
     #[inline]
     pub(crate) fn set_shared(&mut self, shared: Arc<Shared<K, V>>) {
@@ -123,12 +129,6 @@ impl<K: Key, V> Message<K, V> {
     /// is the message's key disjoint with an set of keys
     pub(crate) fn is_disjoint(&self, other: &HashSet<K>) -> bool {
         self.key.is_disjoint(other)
-    }
-
-    /// new a single key message
-    #[inline]
-    pub fn single_key(key: K, value: V) -> Self {
-        Message { key: KeySet::Single(key), value, shared: None }
     }
 
     /// is the message's keyset containes multiple keys
