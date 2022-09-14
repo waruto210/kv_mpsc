@@ -1,7 +1,7 @@
 //! A message contains mutiple keys and single value
 
-use crate::unwrap_ok_or;
-use crate::Shared;
+// use crate::unwrap_ok_or;
+use crate::buff::BuffMessage;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -61,23 +61,23 @@ impl<K: Key> KeySet<K> {
     }
 }
 ///  Message type in channel
-pub struct Message<K: Key, V> {
+pub struct Message<K: Key, V, T: DeactivateKeys<Key = K>> {
     /// message key
-    key: KeySet<K>,
+    pub(crate) key: KeySet<K>,
     /// messasge value
-    value: V,
+    pub(crate) value: V,
     /// use to control the active keys
-    shared: Option<Arc<Shared<K, V>>>,
+    shared: Option<Arc<T>>,
 }
 
-impl<K: Key, V: PartialEq> PartialEq for Message<K, V> {
+impl<K: Key, V: PartialEq, T: DeactivateKeys<Key = K>> PartialEq for Message<K, V, T> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key && self.value == other.value
     }
 }
 
-impl<K: Key + Debug, V: Debug> Debug for Message<K, V> {
+impl<K: Key + Debug, V: Debug, T: DeactivateKeys<Key = K>> Debug for Message<K, V, T> {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Message")
@@ -87,24 +87,20 @@ impl<K: Key + Debug, V: Debug> Debug for Message<K, V> {
     }
 }
 
-impl<K: Key, V> Drop for Message<K, V> {
+impl<K: Key, V, T: DeactivateKeys<Key = K>> Drop for Message<K, V, T> {
     #[inline]
     fn drop(&mut self) {
         if let Some(shared) = self.shared.take() {
-            let mut state = unwrap_ok_or!(shared.state.lock(), err, panic!("{:?}", err));
-            match self.key {
-                KeySet::Single(ref k) => state.buff.remove_active_key(k),
-                KeySet::Multiple(ref keys) => {
-                    for k in keys.iter() {
-                        state.buff.remove_active_key(k);
-                    }
-                }
-            }
+            let keys = match self.key {
+                KeySet::Single(ref k) => vec![k],
+                KeySet::Multiple(ref keys) => keys.iter().collect::<Vec<&K>>(),
+            };
+            shared.release_key(keys);
         }
     }
 }
 
-impl<K: Key, V> Message<K, V> {
+impl<K: Key, V, T: DeactivateKeys<Key = K>> Message<K, V, T> {
     /// new a message
     #[inline]
     pub fn multiple_keys<I>(keys: I, value: V) -> Self
@@ -122,26 +118,14 @@ impl<K: Key, V> Message<K, V> {
 
     /// set the share queue
     #[inline]
-    pub(crate) fn set_shared(&mut self, shared: Arc<Shared<K, V>>) {
+    pub(crate) fn set_shared(&mut self, shared: Arc<T>) {
         self.shared = Some(shared);
-    }
-
-    /// is the message's key disjoint with an set of keys
-    pub(crate) fn is_disjoint(&self, other: &HashSet<K>) -> bool {
-        self.key.is_disjoint(other)
     }
 
     /// is the message's keyset containes multiple keys
     #[inline]
     pub fn is_multiple(&self) -> bool {
         self.key.is_multiple()
-    }
-
-    /// collect all keys to an owned vector
-    /// applicable to both key types
-    #[inline]
-    pub fn get_owned_keys(&self) -> Vec<K> {
-        self.key.get_owned_keys()
     }
 
     /// return a ref to single key or None
@@ -161,4 +145,29 @@ impl<K: Key, V> Message<K, V> {
     pub fn get_value(&self) -> &V {
         &self.value
     }
+}
+
+impl<K: Key, V, T: DeactivateKeys<Key = K>> BuffMessage for Message<K, V, T> {
+    type Key = K;
+
+    /// is the message's key disjoint with an set of keys
+    fn is_disjoint(&self, other: &HashSet<Self::Key>) -> bool {
+        self.key.is_disjoint(other)
+    }
+
+    /// collect all keys to an owned vector
+    /// applicable to both key types
+    fn get_owned_keys(&self) -> Vec<Self::Key> {
+        self.key.get_owned_keys()
+    }
+}
+
+/// A trait used that to deactivate all keys when
+/// a message is drop
+pub trait DeactivateKeys {
+    /// key type
+    type Key: Key;
+
+    /// release all keys
+    fn release_key<'a, I: IntoIterator<Item = &'a Self::Key>>(&'a self, keys: I);
 }

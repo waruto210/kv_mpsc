@@ -1,10 +1,7 @@
 //! A FIFO queue shared by sender and receiver
 
-#[cfg(feature = "async")]
-use tokio::sync::OwnedSemaphorePermit;
-
 use crate::err::RecvError;
-use crate::message::{Key, Message};
+use crate::message::Key;
 use crate::unwrap_some_or;
 use std::borrow::Borrow;
 use std::collections::HashSet;
@@ -22,51 +19,36 @@ use std::collections::VecDeque;
 /// actual buffer type
 type BuffType<T> = VecDeque<T>;
 
-#[cfg(not(feature = "async"))]
-/// actual buffer item type
-type BuffItemType<K, V> = Message<K, V>;
-#[cfg(feature = "async")]
-/// actual buffer item type
-type BuffItemType<K, V> = (Message<K, V>, OwnedSemaphorePermit);
-
 /// A fixed size buff
 #[derive(Debug)]
-pub(crate) struct Buff<K: Key, V> {
+pub(crate) struct KeyedBuff<T: BuffMessage> {
     /// FIFO queue buff
-    buff: BuffType<BuffItemType<K, V>>,
-    #[cfg(not(feature = "async"))]
+    buff: BuffType<T>,
     /// capacity of buff
     cap: usize,
     /// all current active keys
-    activate_keys: HashSet<K>,
+    activate_keys: HashSet<<T as BuffMessage>::Key>,
 }
 
-impl<K: Key, V> Buff<K, V> {
-    #[cfg(not(feature = "async"))]
+impl<T: BuffMessage> KeyedBuff<T> {
     /// new a buff with cap
     pub(crate) fn new(cap: usize) -> Self {
-        Buff { buff: BuffType::new(), cap, activate_keys: HashSet::with_capacity(cap) }
-    }
-
-    #[cfg(feature = "async")]
-    /// new a buff with cap
-    pub(crate) fn new(cap: usize) -> Self {
-        Buff { buff: BuffType::new(), activate_keys: HashSet::with_capacity(cap) }
+        KeyedBuff {
+            buff: BuffType::new(),
+            cap,
+            activate_keys: HashSet::with_capacity(cap),
+        }
     }
 
     /// push back to buff
-    pub(crate) fn push_back(&mut self, m: BuffItemType<K, V>) {
+    pub(crate) fn push_back(&mut self, m: T) {
         self.buff.push_back(m);
     }
 
     /// pop an unconflict message as front as possible
-    pub(crate) fn pop_unconflict_front(
-        &mut self,
-    ) -> Result<BuffItemType<K, V>, RecvError> {
+    pub(crate) fn pop_unconflict_front(&mut self) -> Result<T, RecvError> {
         let mut index: usize = 0;
         for msg in &self.buff {
-            #[cfg(feature = "async")]
-            let msg = &msg.0;
             if msg.is_disjoint(&self.activate_keys) {
                 break;
             }
@@ -81,13 +63,7 @@ impl<K: Key, V> Buff<K, V> {
             #[cfg(feature = "list")]
             let msg = self.buff.remove(index);
 
-            #[cfg(not(feature = "async"))]
             for key in msg.get_owned_keys() {
-                let _ = self.activate_keys.insert(key);
-            }
-
-            #[cfg(feature = "async")]
-            for key in msg.0.get_owned_keys() {
                 let _ = self.activate_keys.insert(key);
             }
             Ok(msg)
@@ -95,15 +71,14 @@ impl<K: Key, V> Buff<K, V> {
     }
 
     /// remove an active key
-    pub(crate) fn remove_active_key<Q>(&mut self, key: &Q)
+    pub(crate) fn deactivate_key<Q>(&mut self, key: &Q)
     where
-        K: Borrow<Q>,
+        <T as BuffMessage>::Key: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let _ = self.activate_keys.remove(key);
     }
 
-    #[cfg(not(feature = "async"))]
     /// is buffer full
     pub(crate) fn is_full(&self) -> bool {
         self.buff.len() == self.cap
@@ -115,11 +90,24 @@ impl<K: Key, V> Buff<K, V> {
     }
 }
 
-/// the state of queue
+/// A trait that represents keyed message stored in buffer
+pub(crate) trait BuffMessage {
+    /// key type
+    type Key: Key;
+
+    /// is the message's key disjoint with an set of keys
+    fn is_disjoint(&self, other: &HashSet<Self::Key>) -> bool;
+
+    /// collect all keys to an owned vector
+    /// applicable to both key types
+    fn get_owned_keys(&self) -> Vec<Self::Key>;
+}
+
+/// The state of queue
 #[derive(Debug)]
-pub(crate) struct State<K: Key, V> {
+pub(crate) struct State<T: BuffMessage> {
     /// queue buffer
-    pub(crate) buff: Buff<K, V>,
+    pub(crate) buff: KeyedBuff<T>,
     /// n senders of the queue
     pub(crate) n_senders: usize,
     /// is the queue disconnected

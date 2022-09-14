@@ -1,9 +1,12 @@
 //! S simple benchmark
+use std::sync::Arc;
+
 use criterion::{criterion_group, criterion_main, Criterion};
-use kv_mpsc::{bounded, unwrap_ok_or, Message, RecvError};
+#[cfg(feature = "async")]
+use kv_mpsc::async_channel;
+use kv_mpsc::{sync_channel, unwrap_ok_or, Message, RecvError};
 
 #[inline]
-#[cfg(not(feature = "async"))]
 fn std_mpsc() {
     let cap = 1000;
     let send = 10000;
@@ -14,7 +17,7 @@ fn std_mpsc() {
         let tx = tx.clone();
         let handle = std::thread::spawn(move || {
             for i in 0..send {
-                let m = Message::single_key(thread * send + i, 1);
+                let m = (thread * send + i, 1, Option::None::<Arc<i32>>);
                 unwrap_ok_or!(tx.send(m), err, panic!("{:?}", err));
             }
         });
@@ -30,12 +33,11 @@ fn std_mpsc() {
 }
 
 #[inline]
-#[cfg(not(feature = "async"))]
 fn no_conflict() {
     let cap = 1000;
     let send = 10000;
     let threads = 16;
-    let (tx, rx) = bounded(cap);
+    let (tx, rx) = sync_channel::bounded(cap);
     let mut handles = vec![];
     for thread in 0..threads {
         let tx = tx.clone();
@@ -57,13 +59,12 @@ fn no_conflict() {
 }
 
 #[inline]
-#[cfg(not(feature = "async"))]
 fn with_conflict() {
     let cap = 1000;
     let send = 10000;
     let threads = 16;
     let mut handles = vec![];
-    let (tx, rx) = bounded(cap);
+    let (tx, rx) = sync_channel::bounded(cap);
     for _ in 0..threads {
         let tx = tx.clone();
         let handle = std::thread::spawn(move || {
@@ -120,7 +121,7 @@ async fn tokio_mpsc() {
         let tx = tx.clone();
         let handle = tokio::spawn(async move {
             for i in 0..send {
-                let m = Message::single_key(thread * send + i, 1);
+                let m = (thread * send + i, 1, Option::None::<Arc<i32>>);
                 unwrap_ok_or!(tx.send(m).await, err, panic!("{:?}", err));
             }
         });
@@ -137,11 +138,11 @@ async fn tokio_mpsc() {
 
 #[inline]
 #[cfg(feature = "async")]
-async fn no_conflict() {
+async fn async_no_conflict() {
     let cap = 1000;
     let send = 10000;
     let threads = 16;
-    let (tx, rx) = bounded(cap);
+    let (tx, rx) = async_channel::bounded(cap);
     let mut handles = vec![];
     for thread in 0..threads {
         let tx = tx.clone();
@@ -164,12 +165,12 @@ async fn no_conflict() {
 
 #[inline]
 #[cfg(feature = "async")]
-async fn with_conflict() {
+async fn async_with_conflict() {
     let cap = 1000;
     let send = 10000;
     let threads = 16;
     let mut handles = vec![];
-    let (tx, rx) = bounded(cap);
+    let (tx, rx) = async_channel::bounded(cap);
     for _ in 0..threads {
         let tx = tx.clone();
         let handle = tokio::spawn(async move {
@@ -212,7 +213,6 @@ async fn with_conflict() {
     }
 }
 
-#[cfg(not(feature = "async"))]
 pub fn send_recv(c: &mut Criterion) {
     let mut group = c.benchmark_group("MultiThread Send and Recv");
     group.bench_function("std mpsc", |b| b.iter(std_mpsc));
@@ -222,18 +222,24 @@ pub fn send_recv(c: &mut Criterion) {
 }
 
 #[cfg(feature = "async")]
-pub fn send_recv(c: &mut Criterion) {
+pub fn async_send_recv(c: &mut Criterion) {
     let mut group = c.benchmark_group("MultiThread Send and Recv");
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(8)
         .build()
         .unwrap();
     group.bench_function("tokio mpsc", |b| b.to_async(&rt).iter(tokio_mpsc));
-    group.bench_function("kv_mpsc no conflict", |b| b.to_async(&rt).iter(no_conflict));
-    group
-        .bench_function("kv_mpsc with conflict", |b| b.to_async(&rt).iter(with_conflict));
+    group.bench_function("async kv_mpsc no conflict", |b| {
+        b.to_async(&rt).iter(async_no_conflict)
+    });
+    group.bench_function("async kv_mpsc with conflict", |b| {
+        b.to_async(&rt).iter(async_with_conflict)
+    });
     group.finish();
 }
 
+#[cfg(not(feature = "async"))]
 criterion_group!(benches, send_recv);
+#[cfg(feature = "async")]
+criterion_group!(benches, send_recv, async_send_recv);
 criterion_main!(benches);

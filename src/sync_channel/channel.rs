@@ -1,10 +1,11 @@
 //! Sync mpsc channel that support key conflict resolution
 
 use super::shared::Shared;
+use super::Message;
+use crate::buff::KeyedBuff;
+use crate::buff::State;
 use crate::err::{RecvError, SendError};
-use crate::message::{Key, Message};
-use crate::state::Buff;
-use crate::state::State;
+use crate::message::Key;
 use crate::{unwrap_ok_or, unwrap_some_or};
 use std::cell::RefCell;
 use std::fmt::Debug;
@@ -12,12 +13,12 @@ use std::sync::{Arc, Condvar, Mutex};
 
 /// A bounded sender that will block when there no empty buff slot
 #[derive(Debug)]
-pub struct SyncSender<K: Key, V> {
+pub struct BoundedSender<K: Key, V> {
     /// inner shared queue
     inner: Arc<Shared<K, V>>,
 }
 
-impl<K: Key, V> SyncSender<K, V> {
+impl<K: Key, V> BoundedSender<K, V> {
     /// send a message
     /// # Errors
     ///
@@ -28,7 +29,7 @@ impl<K: Key, V> SyncSender<K, V> {
     }
 }
 
-impl<K: Key, V> Clone for SyncSender<K, V> {
+impl<K: Key, V> Clone for BoundedSender<K, V> {
     #[inline]
     fn clone(&self) -> Self {
         let mut state = unwrap_ok_or!(self.inner.state.lock(), err, panic!("{:?}", err));
@@ -40,7 +41,7 @@ impl<K: Key, V> Clone for SyncSender<K, V> {
     }
 }
 
-impl<K: Key, V> Drop for SyncSender<K, V> {
+impl<K: Key, V> Drop for BoundedSender<K, V> {
     #[inline]
     fn drop(&mut self) {
         let mut state = unwrap_ok_or!(self.inner.state.lock(), err, panic!("{:?}", err));
@@ -101,18 +102,18 @@ impl<K: Key, V> Drop for Receiver<K, V> {
 #[inline]
 #[must_use]
 #[doc(alias = "channel")]
-pub fn bounded<K: Key, V>(cap: usize) -> (SyncSender<K, V>, Receiver<K, V>) {
+pub fn bounded<K: Key, V>(cap: usize) -> (BoundedSender<K, V>, Receiver<K, V>) {
     assert!(cap > 0, "The capacity of channel must be greater than 0");
     let inner = Arc::new(Shared {
         state: Mutex::new(State {
-            buff: Buff::new(cap),
+            buff: KeyedBuff::new(cap),
             n_senders: 1,
             disconnected: false,
         }),
         fill: Condvar::new(),
         empty: Condvar::new(),
     });
-    let s = SyncSender { inner: Arc::<Shared<K, V>>::clone(&inner) };
+    let s = BoundedSender { inner: Arc::<Shared<K, V>>::clone(&inner) };
     let r = Receiver { inner, _marker: std::marker::PhantomData };
     (s, r)
 }

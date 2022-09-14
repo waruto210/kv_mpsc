@@ -6,7 +6,7 @@
 //! Simple usage:
 //! ```rust
 //! use std::thread;
-//! use kv_mpsc::bounded;
+//! use kv_mpsc::sync_channel::bounded;
 //! use kv_mpsc::Message;
 //!
 //! // create a simple channel
@@ -26,7 +26,7 @@
 //!
 //! ```rust
 //! use std::thread;
-//! use kv_mpsc::bounded;
+//! use kv_mpsc::sync_channel::bounded;
 //! use kv_mpsc::Message;
 //! use kv_mpsc::RecvError;
 //!
@@ -51,14 +51,18 @@
 //! ```
 
 mod channel;
+
+pub use channel::{bounded, BoundedSender, Receiver};
 mod shared;
-pub use channel::{bounded, Receiver, SyncSender};
-pub(crate) use shared::Shared;
+
+/// the real messge used in sync channel
+type Message<K, V> = crate::Message<K, V, shared::Shared<K, V>>;
 
 #[cfg(test)]
 mod test {
 
-    use crate::{bounded, unwrap_ok_or, unwrap_some_or, Message, RecvError, SendError};
+    use crate::sync_channel::bounded;
+    use crate::{unwrap_ok_or, unwrap_some_or, Message, RecvError, SendError};
     use std::{
         collections::HashSet,
         iter::FromIterator,

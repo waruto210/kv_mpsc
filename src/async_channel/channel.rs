@@ -3,10 +3,10 @@
 use tokio::sync::{Notify, Semaphore};
 
 use super::shared::Shared;
+use super::Message;
+use crate::buff::{KeyedBuff, State};
 use crate::err::{RecvError, SendError};
-use crate::message::{Key, Message};
-use crate::state::Buff;
-use crate::state::State;
+use crate::message::Key;
 use crate::{unwrap_ok_or, unwrap_some_or};
 use std::cell::RefCell;
 use std::fmt::Debug;
@@ -112,7 +112,7 @@ pub fn bounded<K: Key, V>(cap: usize) -> (BoundedSender<K, V>, Receiver<K, V>) {
     assert!(cap > 0, "The capacity of channel must be greater than 0");
     let inner = Arc::new(Shared {
         state: Mutex::new(State {
-            buff: Buff::new(cap),
+            buff: KeyedBuff::new(cap),
             n_senders: 1,
             disconnected: false,
         }),

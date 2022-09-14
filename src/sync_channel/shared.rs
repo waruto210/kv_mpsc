@@ -1,27 +1,38 @@
 //! A FIFO queue shared by sender and receiver
 
+use super::Message;
+use crate::buff::State;
 use crate::err::{RecvError, SendError};
-use crate::message::{Key, Message};
-use crate::state::State;
+use crate::message::{DeactivateKeys, Key};
 use crate::unwrap_ok_or;
 use std::fmt::Debug;
 use std::sync::{Condvar, Mutex, MutexGuard};
 
-// use tokio::sync::mpsc::channel;
 /// shared state between senders and receiver
 #[derive(Debug)]
-pub(crate) struct Shared<K: Key, V> {
+pub struct Shared<K: Key, V> {
     /// the queue state
-    pub(crate) state: Mutex<State<K, V>>,
+    pub(crate) state: Mutex<State<Message<K, V>>>,
     /// cond var that representes fill a new message into queue
     pub(crate) fill: Condvar,
     /// cond var that representes consume a message from queue
     pub(crate) empty: Condvar,
 }
 
+impl<K: Key, V> DeactivateKeys for Shared<K, V> {
+    type Key = K;
+    /// release all keys
+    fn release_key<'a, I: IntoIterator<Item = &'a Self::Key>>(&'a self, keys: I) {
+        let mut state = unwrap_ok_or!(self.state.lock(), err, panic!("{:?}", err));
+        for k in keys {
+            state.buff.deactivate_key(k);
+        }
+    }
+}
+
 impl<K: Key, V> Shared<K, V> {
     /// wait for an empty buff slot to put a message
-    fn acquire_send_slot(&self) -> MutexGuard<'_, State<K, V>> {
+    fn acquire_send_slot(&self) -> MutexGuard<'_, State<Message<K, V>>> {
         let mut state = unwrap_ok_or!(self.state.lock(), err, panic!("{:?}", err));
         loop {
             if !state.buff.is_full() || state.disconnected {

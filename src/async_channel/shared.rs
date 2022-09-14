@@ -4,22 +4,33 @@
 
 use tokio::sync::{Notify, Semaphore};
 
+use super::{Message, StoredMessage};
+use crate::buff::State;
 use crate::err::{RecvError, SendError};
-use crate::message::{Key, Message};
-use crate::state::State;
+use crate::message::{DeactivateKeys, Key};
 use crate::unwrap_ok_or;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 
 /// shared state between senders and receiver
 #[derive(Debug)]
-pub(crate) struct Shared<K: Key, V> {
+pub struct Shared<K: Key, V> {
     /// the queue state
-    pub(crate) state: Mutex<State<K, V>>,
+    pub(crate) state: Mutex<State<StoredMessage<K, V>>>,
     /// semaphore that representes buffer resources
     pub(crate) slots: Arc<Semaphore>,
     /// notify receiver when send a message
     pub(crate) notify_receiver: Notify,
+}
+
+impl<K: Key, V> DeactivateKeys for Shared<K, V> {
+    type Key = K;
+    fn release_key<'a, I: IntoIterator<Item = &'a Self::Key>>(&'a self, keys: I) {
+        let mut state = unwrap_ok_or!(self.state.lock(), err, panic!("{:?}", err));
+        for k in keys {
+            state.buff.deactivate_key(k);
+        }
+    }
 }
 
 impl<K: Key, V: Debug> Shared<K, V> {
@@ -57,8 +68,6 @@ impl<K: Key, V: Debug> Shared<K, V> {
 
     /// recv a message
     pub(crate) async fn recv(&self) -> Result<Message<K, V>, RecvError> {
-        let future = self.notify_receiver.notified();
-        tokio::pin!(future);
         // use loop, consider
         // senders push x values, call x times `notify_one`, only a single permit is stored
         // receiver consume x values
@@ -69,8 +78,7 @@ impl<K: Key, V: Debug> Shared<K, V> {
             if let Some(msg) = self.try_recv()? {
                 return Ok(msg);
             }
-            future.as_mut().await;
-            future.set(self.notify_receiver.notified());
+            self.notify_receiver.notified().await;
         }
     }
 }

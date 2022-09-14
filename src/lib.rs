@@ -105,25 +105,26 @@
     clippy::multiple_crate_versions, // caused by the dependency, can't be fixed
 )]
 #![feature(linked_list_remove)]
+
 //! `kv_mpsc` is a mpsc channel that support key conflict resolution.
 //! //!
 //! This module provides message-based communication over channels, concretely
 //! defined among two types:
-//! * [`BoundedSender`]
-//! * [`Receiver`]
+//! * [`sync_channel::BoundedSender`]
+//! * [`sync_channel::Receiver`]
 //!
-//! [`BoundedSender`] is used to send data to a [`Receiver`]. [`BoundedSender`] is
+//! [`sync_channel::BoundedSender`] is used to send data to a [`sync_channel::Receiver`]. [`sync_channel::BoundedSender`] is
 //! clone-able (multi-producer) such that many threads can send simultaneously
 //! to one receiver (single-consumer).
 //!
-//! The channel is a synchronous, bounded channel. The [`bounded`] function will
-//! return a `(SyncSender, Receiver)` tuple where the storage for pending
+//! The channel is a synchronous, bounded channel. The [`sync_channel::bounded`] function will
+//! return a `(BoundedSender, Receiver)` tuple where the storage for pending
 //! messages is a pre-allocated buffer of a fixed size. All sends will be
 //! **synchronous** by blocking until there is buffer space available. For simplicity
 //! of implementation, capacity of channel must be greater that zero.
 //!
 //! ## Key of message and conflict
-//! All messages in [`bounded`] have single/multiple key(s), once a message is consumed
+//! All messages in channel have single/multiple key(s), once a message is consumed
 //! by a receiver, it's key(s) will be active, and other messages that have key(s) conflict with
 //! active keys could not be consumed by receivers; when the message is droped, it's key(s) will be removed
 //! from the active keyset
@@ -138,25 +139,17 @@
 //! subsequent recv calls will return an [`err::RecvError`].
 //! If the receiver closed, all sender's `send` invocation will return an [`err::SendError`].
 //!
-//! ## Async/Sync
-//! Implement an async version based on tokio, use `async` to enable it.
+//! ## Async/ version
+//! [`async_channel`] is the async version based on tokio, both have the same interface.
 
 #[cfg(feature = "async")]
-mod async_channel;
-#[cfg(feature = "async")]
-pub(crate) use async_channel::Shared;
-#[cfg(feature = "async")]
-pub use async_channel::{bounded, BoundedSender, Receiver};
+pub mod async_channel;
+
+mod buff;
 mod err;
 mod message;
-mod state;
-#[cfg(not(feature = "async"))]
-mod sync_channel;
+pub mod sync_channel;
 mod util;
 
 pub use err::*;
 pub use message::Message;
-#[cfg(not(feature = "async"))]
-pub(crate) use sync_channel::Shared;
-#[cfg(not(feature = "async"))]
-pub use sync_channel::{bounded, Receiver, SyncSender};
