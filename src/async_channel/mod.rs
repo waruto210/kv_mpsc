@@ -100,6 +100,47 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::unwrap_used)]
+    async fn test_conflict_msg_sequence_correct() {
+        // send keys 1, 1, 2, 2, 3
+        // recv 1, 2, 3
+        // drop 2
+        // recv 2
+        // drop 1
+        // recv 1
+
+        let cap = 5;
+        let (tx, rx) = bounded(cap);
+        let msg = Message::single_key(1, 1);
+        let _drop = tx.send(msg).await;
+        let msg1 = Message::single_key(1, 1);
+        let _drop1 = tx.send(msg1).await;
+        let msg2 = Message::single_key(2, 1);
+        let _drop2 = tx.send(msg2).await;
+        let msg3 = Message::single_key(2, 1);
+        let _drop3 = tx.send(msg3).await;
+        let msg4 = Message::single_key(3, 1);
+        let _drop4 = tx.send(msg4).await;
+
+        let key1_msg1 = rx.recv().await.unwrap();
+        let key2_msg1 = rx.recv().await.unwrap();
+        let key3_msg1 = rx.recv().await.unwrap();
+        assert_eq!(key1_msg1.get_single_key(), Some(&1));
+        assert_eq!(key2_msg1.get_single_key(), Some(&2));
+        assert_eq!(key3_msg1.get_single_key(), Some(&3));
+        assert_eq!(rx.recv().await, Err(RecvError::AllConflict));
+        drop(key2_msg1);
+        let key2_msg2 = rx.recv().await.unwrap();
+        assert_eq!(key2_msg2.get_single_key(), Some(&2));
+        assert_eq!(rx.recv().await, Err(RecvError::AllConflict));
+        drop(key3_msg1);
+        assert_eq!(rx.recv().await, Err(RecvError::AllConflict));
+        drop(key1_msg1);
+        let key1_msg2 = rx.recv().await.unwrap();
+        assert_eq!(key1_msg2.get_single_key(), Some(&1));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_no_conflict_single_key_send_recv() {
         let cap = 10;
         let send = 100;

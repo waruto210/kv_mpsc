@@ -2,7 +2,7 @@
 
 // use crate::unwrap_ok_or;
 use crate::buff::BuffMessage;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter::FromIterator;
@@ -23,11 +23,19 @@ pub(crate) enum KeySet<K: Key> {
 }
 
 impl<K: Key> KeySet<K> {
-    /// is key disjoint with an set of keys
-    pub(crate) fn is_disjoint(&self, other: &HashSet<K>) -> bool {
+    /// collect all conflict keys with keys in other
+    pub(crate) fn conflict_keys(&self, other: &HashMap<K, usize>) -> Option<Vec<&K>> {
         match *self {
-            Self::Single(ref k) => !other.contains(k),
-            Self::Multiple(ref keys) => keys.is_disjoint(other),
+            Self::Single(ref k) => other.contains_key(k).then(|| vec![k]),
+            Self::Multiple(ref keys) => {
+                let mut ret = vec![];
+                for k in keys {
+                    if other.contains_key(k) {
+                        ret.push(k);
+                    }
+                }
+                (!ret.is_empty()).then(|| ret)
+            }
         }
     }
 
@@ -150,9 +158,9 @@ impl<K: Key, V, T: DeactivateKeys<Key = K>> Message<K, V, T> {
 impl<K: Key, V, T: DeactivateKeys<Key = K>> BuffMessage for Message<K, V, T> {
     type Key = K;
 
-    /// is the message's key disjoint with an set of keys
-    fn is_disjoint(&self, other: &HashSet<Self::Key>) -> bool {
-        self.key.is_disjoint(other)
+    /// collect all conflict keys with keys in other
+    fn conflict_keys(&self, other: &HashMap<Self::Key, usize>) -> Option<Vec<&K>> {
+        self.key.conflict_keys(other)
     }
 
     /// collect all keys to an owned vector

@@ -4,7 +4,7 @@ use crate::err::RecvError;
 use crate::message::Key;
 use crate::unwrap_some_or;
 use std::borrow::Borrow;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -26,8 +26,11 @@ pub(crate) struct KeyedBuff<T: BuffMessage> {
     buff: BuffType<T>,
     /// capacity of buff
     cap: usize,
-    /// all current active keys
-    activate_keys: HashSet<<T as BuffMessage>::Key>,
+    /// keys is current active key, value point to first msg
+    /// in buff that conflict with that key, cap means None
+    activate_keys: HashMap<<T as BuffMessage>::Key, usize>,
+    /// curr scan start position
+    curr: usize,
 }
 
 impl<T: BuffMessage> KeyedBuff<T> {
@@ -36,7 +39,8 @@ impl<T: BuffMessage> KeyedBuff<T> {
         KeyedBuff {
             buff: BuffType::new(),
             cap,
-            activate_keys: HashSet::with_capacity(cap),
+            activate_keys: HashMap::with_capacity(cap),
+            curr: 0,
         }
     }
 
@@ -47,14 +51,23 @@ impl<T: BuffMessage> KeyedBuff<T> {
 
     /// pop an unconflict message as front as possible
     pub(crate) fn pop_unconflict_front(&mut self) -> Result<T, RecvError> {
-        let mut index: usize = 0;
-        for msg in &self.buff {
-            if msg.is_disjoint(&self.activate_keys) {
+        let mut index: usize = self.curr;
+        for msg in self.buff.iter().skip(index) {
+            if let Some(conflict_keys) = msg.conflict_keys(&self.activate_keys) {
+                for key in conflict_keys {
+                    if let Some(v) = self.activate_keys.get_mut(key) {
+                        if index < *v {
+                            *v = index;
+                        }
+                    }
+                }
+            } else {
                 break;
             }
             let new_index = unwrap_some_or!(index.checked_add(1), panic!("fatal error"));
             index = new_index;
         }
+        self.curr = index;
         if index >= self.buff.len() {
             Err(RecvError::AllConflict)
         } else {
@@ -64,7 +77,7 @@ impl<T: BuffMessage> KeyedBuff<T> {
             let msg = self.buff.remove(index);
 
             for key in msg.get_owned_keys() {
-                let _ = self.activate_keys.insert(key);
+                let _ = self.activate_keys.insert(key, self.cap);
             }
             Ok(msg)
         }
@@ -76,7 +89,12 @@ impl<T: BuffMessage> KeyedBuff<T> {
         <T as BuffMessage>::Key: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let _ = self.activate_keys.remove(key);
+        if let Some(index) = self.activate_keys.remove(key) {
+            if index < self.cap && index < self.curr {
+                // point to the first msg that conflict with that key
+                self.curr = index;
+            }
+        }
     }
 
     /// is buffer full
@@ -96,7 +114,8 @@ pub(crate) trait BuffMessage {
     type Key: Key;
 
     /// is the message's key disjoint with an set of keys
-    fn is_disjoint(&self, other: &HashSet<Self::Key>) -> bool;
+    fn conflict_keys(&self, other: &HashMap<Self::Key, usize>)
+        -> Option<Vec<&Self::Key>>;
 
     /// collect all keys to an owned vector
     /// applicable to both key types

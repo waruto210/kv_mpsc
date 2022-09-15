@@ -6,24 +6,25 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use kv_mpsc::async_channel;
 use kv_mpsc::{sync_channel, unwrap_ok_or, Message, RecvError};
 
+const CAP: usize = 1000;
+const SEND: i32 = 10000;
+const THREADS: i32 = 16;
+
 #[inline]
 fn std_mpsc() {
-    let cap = 1000;
-    let send = 10000;
-    let threads = 16;
-    let (tx, rx) = std::sync::mpsc::sync_channel(cap);
+    let (tx, rx) = std::sync::mpsc::sync_channel(CAP);
     let mut handles = vec![];
-    for thread in 0..threads {
+    for thread in 0..THREADS {
         let tx = tx.clone();
         let handle = std::thread::spawn(move || {
-            for i in 0..send {
-                let m = (thread * send + i, 1, Option::None::<Arc<i32>>);
+            for i in 0..SEND {
+                let m = (thread * SEND + i, 1, Option::None::<Arc<i32>>);
                 unwrap_ok_or!(tx.send(m), err, panic!("{:?}", err));
             }
         });
         handles.push(handle);
     }
-    for _ in 0..send * threads {
+    for _ in 0..SEND * THREADS {
         let _drop = unwrap_ok_or!(rx.recv(), err, panic!("{:?}", err));
     }
 
@@ -34,22 +35,19 @@ fn std_mpsc() {
 
 #[inline]
 fn no_conflict() {
-    let cap = 1000;
-    let send = 10000;
-    let threads = 16;
-    let (tx, rx) = sync_channel::bounded(cap);
+    let (tx, rx) = sync_channel::bounded(CAP);
     let mut handles = vec![];
-    for thread in 0..threads {
+    for thread in 0..THREADS {
         let tx = tx.clone();
         let handle = std::thread::spawn(move || {
-            for i in 0..send {
-                let m = Message::single_key(thread * send + i, 1);
+            for i in 0..SEND {
+                let m = Message::single_key(thread * SEND + i, 1);
                 unwrap_ok_or!(tx.send(m), err, panic!("{:?}", err));
             }
         });
         handles.push(handle);
     }
-    for _ in 0..send * threads {
+    for _ in 0..SEND * THREADS {
         let _drop = unwrap_ok_or!(rx.recv(), err, panic!("{:?}", err));
     }
 
@@ -60,15 +58,12 @@ fn no_conflict() {
 
 #[inline]
 fn with_conflict() {
-    let cap = 1000;
-    let send = 10000;
-    let threads = 16;
     let mut handles = vec![];
-    let (tx, rx) = sync_channel::bounded(cap);
-    for _ in 0..threads {
+    let (tx, rx) = sync_channel::bounded(CAP);
+    for _ in 0..THREADS {
         let tx = tx.clone();
         let handle = std::thread::spawn(move || {
-            for i in 0..send {
+            for i in 0..SEND {
                 let m = Message::single_key(i, 1);
                 unwrap_ok_or!(tx.send(m), err, panic!("{:?}", err));
             }
@@ -97,7 +92,7 @@ fn with_conflict() {
                 _ => {}
             },
         }
-        if count == send * threads {
+        if count == SEND * THREADS {
             break;
         }
     }
@@ -112,22 +107,19 @@ fn with_conflict() {
 async fn tokio_mpsc() {
     use kv_mpsc::unwrap_some_or;
 
-    let cap = 1000;
-    let send = 10000;
-    let threads = 16;
-    let (tx, mut rx) = tokio::sync::mpsc::channel(cap);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(CAP);
     let mut handles = vec![];
-    for thread in 0..threads {
+    for thread in 0..THREADS {
         let tx = tx.clone();
         let handle = tokio::spawn(async move {
-            for i in 0..send {
-                let m = (thread * send + i, 1, Option::None::<Arc<i32>>);
+            for i in 0..SEND {
+                let m = (thread * SEND + i, 1, Option::None::<Arc<i32>>);
                 unwrap_ok_or!(tx.send(m).await, err, panic!("{:?}", err));
             }
         });
         handles.push(handle);
     }
-    for _ in 0..send * threads {
+    for _ in 0..SEND * THREADS {
         let _drop = unwrap_some_or!(rx.recv().await, panic!("fatal error"));
     }
 
@@ -139,22 +131,19 @@ async fn tokio_mpsc() {
 #[inline]
 #[cfg(feature = "async")]
 async fn async_no_conflict() {
-    let cap = 1000;
-    let send = 10000;
-    let threads = 16;
-    let (tx, rx) = async_channel::bounded(cap);
+    let (tx, rx) = async_channel::bounded(CAP);
     let mut handles = vec![];
-    for thread in 0..threads {
+    for thread in 0..THREADS {
         let tx = tx.clone();
         let handle = tokio::spawn(async move {
-            for i in 0..send {
-                let m = Message::single_key(thread * send + i, 1);
+            for i in 0..SEND {
+                let m = Message::single_key(thread * SEND + i, 1);
                 unwrap_ok_or!(tx.send(m).await, err, panic!("{:?}", err));
             }
         });
         handles.push(handle);
     }
-    for _ in 0..send * threads {
+    for _ in 0..SEND * THREADS {
         let _drop = unwrap_ok_or!(rx.recv().await, err, panic!("{:?}", err));
     }
 
@@ -166,15 +155,12 @@ async fn async_no_conflict() {
 #[inline]
 #[cfg(feature = "async")]
 async fn async_with_conflict() {
-    let cap = 1000;
-    let send = 10000;
-    let threads = 16;
     let mut handles = vec![];
-    let (tx, rx) = async_channel::bounded(cap);
-    for _ in 0..threads {
+    let (tx, rx) = async_channel::bounded(CAP);
+    for _ in 0..THREADS {
         let tx = tx.clone();
         let handle = tokio::spawn(async move {
-            for i in 0..send {
+            for i in 0..SEND {
                 let m = Message::single_key(i, 1);
                 unwrap_ok_or!(tx.send(m).await, err, panic!("{:?}", err));
             }
@@ -203,7 +189,7 @@ async fn async_with_conflict() {
                 _ => {}
             },
         }
-        if count == send * threads {
+        if count == SEND * THREADS {
             break;
         }
     }
@@ -214,7 +200,7 @@ async fn async_with_conflict() {
 }
 
 pub fn send_recv(c: &mut Criterion) {
-    let mut group = c.benchmark_group("MultiThread Send and Recv");
+    let mut group = c.benchmark_group("sync send_recv");
     group.bench_function("std mpsc", |b| b.iter(std_mpsc));
     group.bench_function("kv_mpsc no conflict", |b| b.iter(no_conflict));
     group.bench_function("kv_mpsc with conflict", |b| b.iter(with_conflict));
@@ -223,7 +209,7 @@ pub fn send_recv(c: &mut Criterion) {
 
 #[cfg(feature = "async")]
 pub fn async_send_recv(c: &mut Criterion) {
-    let mut group = c.benchmark_group("send_recv");
+    let mut group = c.benchmark_group("async send_recv");
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(8)
         .build()
@@ -241,5 +227,5 @@ pub fn async_send_recv(c: &mut Criterion) {
 #[cfg(not(feature = "async"))]
 criterion_group!(benches, send_recv);
 #[cfg(feature = "async")]
-criterion_group!(benches, send_recv, async_send_recv);
+criterion_group!(benches, async_send_recv);
 criterion_main!(benches);

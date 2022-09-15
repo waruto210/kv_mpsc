@@ -281,6 +281,28 @@ MultiThread Send and Recv/async kv_mpsc with conflict
 Found 1 outliers among 100 measurements (1.00%)
   1 (1.00%) low mild
 ```
+
+### optimization
+
+`pop_unconflict_front` will scan the buff from `curr` instead of 0.
+`activate_keys` record index of the first msg that conflict with one active key, when that key become deactive, `curr` will be set to that index.
+After doing that, with `cap = 1000, send = 10000, threads = 16`, the time consumption of `async send_recv/async kv_mpsc with conflict` bench dropped from 550ms to 170ms.
+
+```rust
+/// A fixed size buff
+#[derive(Debug)]
+pub(crate) struct KeyedBuff<T: BuffMessage> {
+    /// FIFO queue buff
+    buff: BuffType<T>,
+    /// capacity of buff
+    cap: usize,
+    /// keys is current active key, value point to first msg
+    /// in buff that conflict with that key, cap means None
+    activate_keys: HashMap<<T as BuffMessage>::Key, usize>,
+    /// curr scan start position
+    curr: usize,
+}
+```
 ## Research & Study
 
 [`event_listener`](https://docs.rs/event-listener/latest/event_listener/).
@@ -421,38 +443,47 @@ wait 512 times
 envent listener cost 21.530103583s
 ```
 
-Also use `event_listener` in my `kv_mpsc`, and run the previous send&recv bench.
+Also introduce `event_listener` into my `kv_mpsc`, and run the previous send&recv bench.
 
-Take tokio mpsc as reference, the running times are essentially the same for both.
+Take tokio mpsc as reference, the `kv_mpsc` based on `event_listener` is slightly faster than the one based on `Notify`.
 
 `Notify` result is:
 ```bash
-send_recv/tokio mpsc    time:   [31.166 ms 31.227 ms 31.290 ms]
+async send_recv/tokio mpsc
+                        time:   [67.660 ms 68.446 ms 69.141 ms]
+Found 11 outliers among 100 measurements (11.00%)
+  4 (4.00%) low severe
+  6 (6.00%) low mild
+  1 (1.00%) high mild
+Benchmarking async send_recv/async kv_mpsc no conflict: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 12.2s, or reduce sample count to 40.
+async send_recv/async kv_mpsc no conflict
+                        time:   [122.86 ms 123.00 ms 123.14 ms]
+Benchmarking async send_recv/async kv_mpsc with conflict: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 17.4s, or reduce sample count to 20.
+async send_recv/async kv_mpsc with conflict
+                        time:   [174.33 ms 175.05 ms 175.79 ms]
 Found 1 outliers among 100 measurements (1.00%)
   1 (1.00%) high mild
-Benchmarking send_recv/async kv_mpsc no conflict: Warming up for 3.0000 s
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 6.5s, or reduce sample count to 70.
-send_recv/async kv_mpsc no conflict
-                        time:   [64.489 ms 64.557 ms 64.624 ms]
-Benchmarking send_recv/async kv_mpsc with conflict: Warming up for 3.0000 s
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 61.2s, or reduce sample count to 10.
-send_recv/async kv_mpsc with conflict
-                        time:   [577.99 ms 584.02 ms 590.01 ms]
 ```
 
 `event_listener` result is:
 ```bash
-send_recv/tokio mpsc    time:   [36.836 ms 37.009 ms 37.169 ms]
+async send_recv/tokio mpsc
+                        time:   [68.626 ms 69.269 ms 69.850 ms]
 Found 4 outliers among 100 measurements (4.00%)
-  1 (1.00%) low severe
-  3 (3.00%) low mild
-Benchmarking send_recv/async kv_mpsc no conflict: Warming up for 3.0000 s
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 6.8s, or reduce sample count to 70.
-send_recv/async kv_mpsc no conflict
-                        time:   [69.107 ms 69.191 ms 69.277 ms]
-Benchmarking send_recv/async kv_mpsc with conflict: Warming up for 3.0000 s
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 58.2s, or reduce sample count to 10.
-send_recv/async kv_mpsc with conflict
-                        time:   [627.36 ms 634.30 ms 641.26 ms]
+  2 (2.00%) low severe
+  2 (2.00%) low mild
+Benchmarking async send_recv/async kv_mpsc no conflict: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 11.7s, or reduce sample count to 40.
+async send_recv/async kv_mpsc no conflict
+                        time:   [116.95 ms 117.05 ms 117.15 ms]
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) low mild
+  4 (4.00%) high mild
+Benchmarking async send_recv/async kv_mpsc with conflict: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 17.4s, or reduce sample count to 20.
+async send_recv/async kv_mpsc with conflict
+                        time:   [173.57 ms 174.34 ms 175.11 ms]
 
 ```

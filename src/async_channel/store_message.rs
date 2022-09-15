@@ -1,6 +1,6 @@
 //! message store in async channel buffer
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use tokio::sync::OwnedSemaphorePermit;
 
@@ -16,8 +16,10 @@ impl<K: Key, V, T: DeactivateKeys<Key = K>> BuffMessage for StoredMessage<K, V, 
     type Key = K;
 
     /// is the message's key disjoint with an set of keys
-    fn is_disjoint(&self, other: &HashSet<Self::Key>) -> bool {
-        self.0.key.is_disjoint(other)
+    fn conflict_keys(
+        &self, other: &HashMap<Self::Key, usize>,
+    ) -> Option<Vec<&Self::Key>> {
+        self.0.key.conflict_keys(other)
     }
 
     /// collect all keys to an owned vector
