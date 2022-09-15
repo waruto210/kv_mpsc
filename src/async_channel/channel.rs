@@ -1,16 +1,19 @@
 //! Async mpsc channel that support key conflict resolution
 
-use tokio::sync::{Notify, Semaphore};
-
 use super::shared::Shared;
 use super::Message;
 use crate::buff::{KeyedBuff, State};
 use crate::err::{RecvError, SendError};
 use crate::message::Key;
 use crate::{unwrap_ok_or, unwrap_some_or};
+#[cfg(feature = "event_listener")]
+use event_listener::Event;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
+#[cfg(not(feature = "event_listener"))]
+use tokio::sync::Notify;
+use tokio::sync::Semaphore;
 
 /// A bounded sender that will wait when there is no empty buff slot
 #[derive(Debug)]
@@ -58,7 +61,10 @@ impl<K: Key, V> Drop for BoundedSender<K, V> {
         }
         drop(state);
         if last_sender {
+            #[cfg(not(feature = "event_listener"))]
             self.inner.notify_receiver.notify_one();
+            #[cfg(feature = "event_listener")]
+            self.inner.notify_receiver.notify_additional(1);
         }
     }
 }
@@ -117,7 +123,10 @@ pub fn bounded<K: Key, V>(cap: usize) -> (BoundedSender<K, V>, Receiver<K, V>) {
             disconnected: false,
         }),
         slots: Arc::new(Semaphore::new(cap)),
+        #[cfg(not(feature = "event_listener"))]
         notify_receiver: Notify::new(),
+        #[cfg(feature = "event_listener")]
+        notify_receiver: Event::new(),
     });
     let s = BoundedSender { inner: Arc::<Shared<K, V>>::clone(&inner) };
     let r = Receiver { inner, _marker: std::marker::PhantomData };

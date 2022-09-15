@@ -281,3 +281,178 @@ MultiThread Send and Recv/async kv_mpsc with conflict
 Found 1 outliers among 100 measurements (1.00%)
   1 (1.00%) low mild
 ```
+## Research & Study
+
+[`event_listener`](https://docs.rs/event-listener/latest/event_listener/).
+core structure:
+```rust
+/// Inner state of [`Event`].
+struct Inner {
+    /// The number of notified entries, or `usize::MAX` if all of them have been notified.
+    ///
+    /// If there are no entries, this value is set to `usize::MAX`.
+    notified: AtomicUsize,
+
+    /// A linked list holding registered listeners.
+    list: Mutex<List>,
+
+    /// A single cached list entry to avoid allocations on the fast path of the insertion.
+    cache: UnsafeCell<Entry>,
+}
+
+pub struct Event {
+    /// A pointer to heap-allocated inner state.
+    ///
+    /// This pointer is initially null and gets lazily initialized on first use. Semantically, it
+    /// is an `Arc<Inner>` so it's important to keep in mind that it contributes to the [`Arc`]'s
+    /// reference count.
+    inner: AtomicPtr<Inner>,
+}
+
+pub struct EventListener {
+    /// A reference to [`Event`]'s inner state.
+    inner: Arc<Inner>,
+
+    /// A pointer to this listener's entry in the linked list.
+    entry: Option<NonNull<Entry>>,
+}
+
+/// The state of a listener.
+enum State {
+    /// It has just been created.
+    Created,
+
+    /// It has received a notification.
+    ///
+    /// The `bool` is `true` if this was an "additional" notification.
+    Notified(bool),
+
+    /// An async task is polling it.
+    Polling(Waker),
+
+    /// A thread is blocked on it.
+    Waiting(Unparker),
+}
+```
+
+use mutex to project `inner.list`, atomic op and fence to synchronize inner ptr and `inner.notified`.
+
+when listener call `listen` on `Event`, the inner is cloned, and a new waiter entry is insert to `inner.list`.
+
+in sync impl, when listener task call `EventListener.wait`, listener's state will be set to `Waiting`, then call `park` or `park_timeout` to wait until notification is received or the timeout is reached.
+
+in async impl, when `poll` is called on `EventListener`, pass the waker to listener state.
+
+
+when call `notify` on `Event`, it traversals the list, then unpark or wake some blocking threads/tasks.
+
+
+[`tokio Notify`](https://github.com/tokio-rs/tokio/blob/master/tokio/src/sync/notify.rs) 
+
+core structure:
+
+```rust
+#[derive(Debug)]
+pub struct Notify {
+    // This uses 2 bits to store one of `EMPTY`,
+    // `WAITING` or `NOTIFIED`. The rest of the bits
+    // are used to store the number of times `notify_waiters`
+    // was called.
+    state: AtomicUsize,
+    waiters: Mutex<WaitList>,
+}
+/// Future returned from [`Notify::notified()`].
+///
+/// This future is fused, so once it has completed, any future calls to poll
+/// will immediately return `Poll::Ready`.
+#[derive(Debug)]
+pub struct Notified<'a> {
+    /// The `Notify` being received on.
+    notify: &'a Notify,
+
+    /// The current state of the receiving process.
+    state: State,
+
+    /// Entry in the waiter `LinkedList`.
+    waiter: UnsafeCell<Waiter>,
+}
+
+type WaitList = LinkedList<Waiter, <Waiter as linked_list::Link>::Target>;
+
+struct Waiter {
+    /// Intrusive linked-list pointers.
+    pointers: linked_list::Pointers<Waiter>,
+
+    /// Waiting task's waker.
+    waker: Option<Waker>,
+
+    /// `true` if the notification has been assigned to this waiter.
+    notified: Option<NotificationType>,
+
+    /// Should not be `Unpin`.
+    _p: PhantomPinned,
+}
+
+```
+
+tokio `Notify` is very similar to event_listener.
+
+when call `notified` on `Notify`, a `Notified` is returned, when poll on `Notified`, the task may get a permit from `Notify.state` immediately, or set `Notify.state` to waiting, and push new waiter into `Notify.waiters`,  following call to `poll` will check wether the task is notified.
+
+when call `notify_one` on `Notify`,  if there is no task wait, just store 1 permit in the state, or notify one task in waiters.
+
+Main differences between them:
+- `Notify` can store a permit in state, so that if call `notify_one` before any task `notified().await`, the first task await will get a permit immediately, without lock the waiter list, due to this, `Notify` push new waiter into list when await, while `event_listener` push new entry into list when call `listen`, but `event_listener` did the optimization of Entry allocation.
+- `event_listener` use more relaxed memory sequence while `Notify` only use `SeqCst`
+- `Notify` only support notifying one task or notifying all waiting task, `event_listener` support notifying arbitrary number of tasks.
+
+
+write a simple bench in [`mock_mpsc`](src/bin/mock_mpsc.rs), result is as follow. Both take almost the same amount of time, but the wait counts of tokio Notify is about twice as much as event_listener. The reason is that `notify_one` will store a permit in it's state, and the first wait will return immediately and found there's no data, and wait again. 
+
+
+```bash
+% cargo run --release --bin mock_mpsc
+   Compiling kv_mpsc v0.1.0 (/Users/waruto/repos/kv_mpsc)
+    Finished release [optimized] target(s) in 0.64s
+     Running `target/release/mock_mpsc`
+wait 991 times
+notify cost 21.281007166s
+wait 512 times
+envent listener cost 21.530103583s
+```
+
+Also use `event_listener` in my `kv_mpsc`, and run the previous send&recv bench.
+
+Take tokio mpsc as reference, the running times are essentially the same for both.
+
+`Notify` result is:
+```bash
+send_recv/tokio mpsc    time:   [31.166 ms 31.227 ms 31.290 ms]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking send_recv/async kv_mpsc no conflict: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 6.5s, or reduce sample count to 70.
+send_recv/async kv_mpsc no conflict
+                        time:   [64.489 ms 64.557 ms 64.624 ms]
+Benchmarking send_recv/async kv_mpsc with conflict: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 61.2s, or reduce sample count to 10.
+send_recv/async kv_mpsc with conflict
+                        time:   [577.99 ms 584.02 ms 590.01 ms]
+```
+
+`event_listener` result is:
+```bash
+send_recv/tokio mpsc    time:   [36.836 ms 37.009 ms 37.169 ms]
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low severe
+  3 (3.00%) low mild
+Benchmarking send_recv/async kv_mpsc no conflict: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 6.8s, or reduce sample count to 70.
+send_recv/async kv_mpsc no conflict
+                        time:   [69.107 ms 69.191 ms 69.277 ms]
+Benchmarking send_recv/async kv_mpsc with conflict: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 58.2s, or reduce sample count to 10.
+send_recv/async kv_mpsc with conflict
+                        time:   [627.36 ms 634.30 ms 641.26 ms]
+
+```

@@ -2,15 +2,19 @@
 
 //! A FIFO queue shared by sender and receiver
 
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::Semaphore;
 
 use super::{Message, StoredMessage};
 use crate::buff::State;
 use crate::err::{RecvError, SendError};
 use crate::message::{DeactivateKeys, Key};
 use crate::unwrap_ok_or;
+#[cfg(feature = "event_listener")]
+use event_listener::Event;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
+#[cfg(not(feature = "event_listener"))]
+use tokio::sync::Notify;
 
 /// shared state between senders and receiver
 #[derive(Debug)]
@@ -20,7 +24,11 @@ pub struct Shared<K: Key, V> {
     /// semaphore that representes buffer resources
     pub(crate) slots: Arc<Semaphore>,
     /// notify receiver when send a message
+    #[cfg(not(feature = "event_listener"))]
     pub(crate) notify_receiver: Notify,
+    /// notify receiver when send a message
+    #[cfg(feature = "event_listener")]
+    pub(crate) notify_receiver: Event,
 }
 
 impl<K: Key, V> DeactivateKeys for Shared<K, V> {
@@ -46,7 +54,10 @@ impl<K: Key, V: Debug> Shared<K, V> {
         }
         state.buff.push_back((message, permit));
         drop(state);
+        #[cfg(not(feature = "event_listener"))]
         self.notify_receiver.notify_one();
+        #[cfg(feature = "event_listener")]
+        self.notify_receiver.notify_additional(1);
         Ok(())
     }
 
@@ -78,7 +89,10 @@ impl<K: Key, V: Debug> Shared<K, V> {
             if let Some(msg) = self.try_recv()? {
                 return Ok(msg);
             }
+            #[cfg(not(feature = "event_listener"))]
             self.notify_receiver.notified().await;
+            #[cfg(feature = "event_listener")]
+            self.notify_receiver.listen().await;
         }
     }
 }

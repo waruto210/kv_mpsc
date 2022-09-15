@@ -13,12 +13,14 @@ categories = ["concurrency"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
+event-listener = "2.5.3"
 
 
 [features]
 default = [ "async" ]
 list = []
 async = []
+event_listener = []
 
 
 [dev-dependencies]

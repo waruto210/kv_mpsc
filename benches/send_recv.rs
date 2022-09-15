@@ -223,7 +223,7 @@ pub fn send_recv(c: &mut Criterion) {
 
 #[cfg(feature = "async")]
 pub fn async_send_recv(c: &mut Criterion) {
-    let mut group = c.benchmark_group("MultiThread Send and Recv");
+    let mut group = c.benchmark_group("send_recv");
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(8)
         .build()
