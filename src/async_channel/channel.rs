@@ -64,7 +64,7 @@ impl<K: Key, V> Drop for BoundedSender<K, V> {
             #[cfg(not(feature = "event_listener"))]
             self.inner.notify_receiver.notify_one();
             #[cfg(feature = "event_listener")]
-            self.inner.notify_receiver.notify_additional(1);
+            self.inner.notify_receiver.notify(1);
         }
     }
 }
@@ -90,6 +90,21 @@ impl<K: Key, V: Debug> Receiver<K, V> {
             msg.set_shared(Arc::<Shared<K, V>>::clone(&self.inner));
             msg
         })
+    }
+
+    /// print stats
+    #[cfg(feature = "profile")]
+    #[inline]
+    #[allow(unsafe_code)]
+    pub fn print_stats(&self) {
+        // it's safe because there is only one receiver and sender whill not modify these
+        unsafe {
+            println!(
+                "wait count {}, try_recv cost time {:?}",
+                *self.inner.wait_count.get(),
+                *self.inner.try_recv_cost.get(),
+            )
+        }
     }
 }
 
@@ -127,6 +142,10 @@ pub fn bounded<K: Key, V>(cap: usize) -> (BoundedSender<K, V>, Receiver<K, V>) {
         notify_receiver: Notify::new(),
         #[cfg(feature = "event_listener")]
         notify_receiver: Event::new(),
+        #[cfg(feature = "profile")]
+        try_recv_cost: std::cell::UnsafeCell::new(tokio::time::Duration::new(0, 0)),
+        #[cfg(feature = "profile")]
+        wait_count: std::cell::UnsafeCell::new(0),
     });
     let s = BoundedSender { inner: Arc::<Shared<K, V>>::clone(&inner) };
     let r = Receiver { inner, _marker: std::marker::PhantomData };

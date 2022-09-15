@@ -285,8 +285,8 @@ Found 1 outliers among 100 measurements (1.00%)
 ### optimization
 
 `pop_unconflict_front` will scan the buff from `curr` instead of 0.
-`activate_keys` record index of the first msg that conflict with one active key, when that key become deactive, `curr` will be set to that index.
-After doing that, with `cap = 1000, send = 10000, threads = 16`, the time consumption of `async send_recv/async kv_mpsc with conflict` bench dropped from 550ms to 170ms.
+`activate_keys` record index of the first msg that conflict with the active key in it, when that key become deactive, `curr` will be set to that index.
+After doing that, with `cap = 1000, send = 10000, threads = 16`, the time consumption of `async send_recv/async kv_mpsc with conflict`  has reduced 70%.
 
 ```rust
 /// A fixed size buff
@@ -424,66 +424,89 @@ when call `notified` on `Notify`, a `Notified` is returned, when poll on `Notifi
 when call `notify_one` on `Notify`,  if there is no task wait, just store 1 permit in the state, or notify one task in waiters.
 
 Main differences between them:
-- `Notify` can store a permit in state, so that if call `notify_one` before any task `notified().await`, the first task await will get a permit immediately, without lock the waiter list, due to this, `Notify` push new waiter into list when await, while `event_listener` push new entry into list when call `listen`, but `event_listener` did the optimization of Entry allocation.
-- `event_listener` use more relaxed memory sequence while `Notify` only use `SeqCst`
-- `Notify` only support notifying one task or notifying all waiting task, `event_listener` support notifying arbitrary number of tasks.
+- `Notify` can store a permit in state, so that if call `notify_one` before any task call `notified().await`, then the first task await will get a permit immediately, without lock the waiter list, due to this, `Notify` didn't push new waiter into list until await. `event_listener` push new entry into list when call `listen`, but `event_listener` did the optimization of Entry allocation.
+- `event_listener` use more relaxed memory order while `Notify` only use `SeqCst`
+- `Notify` only support notifying one task(store a permit if no task waiting) or notifying all waiting task(do nothing if no task waiting), `event_listener` support notifying arbitrary number of tasks.
 
 
-write a simple bench in [`mock_mpsc`](src/bin/mock_mpsc.rs), result is as follow. Both take almost the same amount of time, but the wait counts of tokio Notify is about twice as much as event_listener. The reason is that `notify_one` will store a permit in it's state, and the first wait will return immediately and found there's no data, and wait again. 
+Write a simple bench in [`mock_mpsc`](src/bin/mock_mpsc.rs), result is as follow. Both take almost the same amount of time, but the wait counts of tokio Notify is about twice as much as event_listener. The reason is that `notify_one` will store a permit in it's state and cause "false positive".The first call of await will return immediately and found there is still no data in buff, and wait again. In `kv_mpsc`, that will cause twice `try_recv` invocations.
 
 
 ```bash
-% cargo run --release --bin mock_mpsc
-   Compiling kv_mpsc v0.1.0 (/Users/waruto/repos/kv_mpsc)
-    Finished release [optimized] target(s) in 0.64s
+130 % cargo run --release --bin mock_mpsc
+   Compiling kv_mpsc v0.1.0 (/home/waruto/repos/kv_mpsc)
+    Finished release [optimized] target(s) in 0.52s
      Running `target/release/mock_mpsc`
-wait 991 times
-notify cost 21.281007166s
+wait 1023 times
+notify cost 21.210985742s
 wait 512 times
-envent listener cost 21.530103583s
+envent listener cost 21.202538365s
 ```
 
-Also introduce `event_listener` into my `kv_mpsc`, and run the previous send&recv bench.
-
-Take tokio mpsc as reference, the `kv_mpsc` based on `event_listener` is slightly faster than the one based on `Notify`.
+Then introduce `event_listener` to my `kv_mpsc`, and run the previous send&recv bench.
 
 `Notify` result is:
 ```bash
 async send_recv/tokio mpsc
-                        time:   [67.660 ms 68.446 ms 69.141 ms]
-Found 11 outliers among 100 measurements (11.00%)
-  4 (4.00%) low severe
-  6 (6.00%) low mild
-  1 (1.00%) high mild
+                        time:   [69.548 ms 70.039 ms 70.481 ms]
+Found 17 outliers among 100 measurements (17.00%)
+  3 (3.00%) low severe
+  9 (9.00%) low mild
+  4 (4.00%) high mild
+  1 (1.00%) high severe
 Benchmarking async send_recv/async kv_mpsc no conflict: Warming up for 3.0000 s
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 12.2s, or reduce sample count to 40.
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 11.9s, or reduce sample count to 40.
 async send_recv/async kv_mpsc no conflict
-                        time:   [122.86 ms 123.00 ms 123.14 ms]
+                        time:   [118.81 ms 118.94 ms 119.08 ms]
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low mild
+  2 (2.00%) high mild
+  1 (1.00%) high severe
 Benchmarking async send_recv/async kv_mpsc with conflict: Warming up for 3.0000 s
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 17.4s, or reduce sample count to 20.
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 29.9s, or reduce sample count to 10.
 async send_recv/async kv_mpsc with conflict
-                        time:   [174.33 ms 175.05 ms 175.79 ms]
-Found 1 outliers among 100 measurements (1.00%)
-  1 (1.00%) high mild
+                        time:   [205.67 ms 206.49 ms 207.30 ms]
 ```
 
 `event_listener` result is:
 ```bash
 async send_recv/tokio mpsc
-                        time:   [68.626 ms 69.269 ms 69.850 ms]
-Found 4 outliers among 100 measurements (4.00%)
-  2 (2.00%) low severe
-  2 (2.00%) low mild
-Benchmarking async send_recv/async kv_mpsc no conflict: Warming up for 3.0000 s
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 11.7s, or reduce sample count to 40.
-async send_recv/async kv_mpsc no conflict
-                        time:   [116.95 ms 117.05 ms 117.15 ms]
+                        time:   [68.907 ms 69.229 ms 69.492 ms]
 Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) low severe
+  4 (4.00%) low mild
+Benchmarking async send_recv/async kv_mpsc no conflict: Warming up for 3.0000 s
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 11.1s, or reduce sample count to 40.
+async send_recv/async kv_mpsc no conflict
+                        time:   [110.16 ms 110.30 ms 110.43 ms]
+Found 3 outliers among 100 measurements (3.00%)
   2 (2.00%) low mild
-  4 (4.00%) high mild
+  1 (1.00%) high mild
 Benchmarking async send_recv/async kv_mpsc with conflict: Warming up for 3.0000 s
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 17.4s, or reduce sample count to 20.
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 26.9s, or reduce sample count to 10.
 async send_recv/async kv_mpsc with conflict
-                        time:   [173.57 ms 174.34 ms 175.11 ms]
+                        time:   [186.56 ms 187.02 ms 187.49 ms]
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) low severe
+  2 (2.00%) high mild
 
 ```
+
+The `kv_mpsc` based on `event_listener` is faster than the one based on `Notify`, but does this situation really due to the number of `try_recv` invocations? So I add some more code for profiling, write a bench [`profile`](src/bin/profile.rs). 
+
+The result is:
+```bash
+➜  kv_mpsc git:(dev) ✗ cargo run --release -F=profile --bin profile
+    Finished release [optimized] target(s) in 0.01s
+     Running `target/release/profile`
+total time cost 6.407398222s
+wait count 5, try_recv cost time 1.291725157s
+
+➜  kv_mpsc git:(dev) ✗ cargo run --release -F=profile,event_listener --bin profile
+    Finished release [optimized] target(s) in 0.01s
+     Running `target/release/profile`
+total time cost 6.233926911s
+wait count 5, try_recv cost time 1.1262019s
+```
+
+The result shows that the wait count is just 5 both, while the number of times `recv` has been called is 8000000. When comparing the two, the former is not worth mentioning. But there is still an obvious difference in the time consumption of `try_recv` between them, what's more, the difference between runtime of `try_recv` is almost the same with difference between total runtime. I suspect this may be due to the `SeqCst` memory order used by `Notify`, which affects the efficiency of shared state locking. 

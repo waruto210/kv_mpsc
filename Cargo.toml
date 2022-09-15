@@ -21,6 +21,7 @@ default = [ "async" ]
 list = []
 async = []
 event_listener = []
+profile = [ "async" ]
 
 
 [dev-dependencies]

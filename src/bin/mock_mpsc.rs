@@ -70,7 +70,7 @@ async fn mock_mpsc_event() {
             for _ in 0..per_task {
                 produce().await;
                 count.fetch_add(1, SeqCst);
-                notify.notify_additional(1);
+                notify.notify(1);
             }
         });
         handles.push(handle);
@@ -78,9 +78,15 @@ async fn mock_mpsc_event() {
     let start = Instant::now();
     let mut wait_count = 0;
     for _ in 0..NUM {
-        while try_get().await && count.load(SeqCst) <= 0 {
-            wait_count += 1;
-            notify.listen().await;
+        loop {
+            let listener = notify.listen();
+            if try_get().await && count.load(SeqCst) <= 0 {
+                wait_count += 1;
+                listener.await;
+            } else {
+                listener.discard();
+                break;
+            }
         }
         count.fetch_sub(1, SeqCst);
         process().await;
