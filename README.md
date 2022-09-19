@@ -1,5 +1,7 @@
 # kv_mpsc
 
+This is a code project from DatenLord
+
 A `kv_mpsc` is a bounded channel like `mpsc` in rust std, but it support message with key.
 
 All messages in `kv_mpsc` have single/multiple key(s), once a message is consumed by a receiver, it's key(s) will be active, and other messages that have key(s) conflict with active keys could not be consumed by receivers; when the message is droped, it's key(s) will be removed from the active keyset.
