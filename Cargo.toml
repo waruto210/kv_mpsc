@@ -1,0 +1,32 @@
+[package]
+name = "kv_mpsc"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/waruto210/kv_mpsc"
+description = "A multiple producer single consumer queue for support message with key(s)"
+license = "MIT"
+readme = "README.md"
+keywords = ["mpsc", "channel"]
+categories = ["concurrency"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+event-listener = "2.5.3"
+
+
+[features]
+default = [ "async" ]
+list = []
+async = []
+event_listener = []
+profile = [ "async" ]
+
+
+[dev-dependencies]
+criterion = { version = "0.3", features = ["async_tokio"] }
+
+[[bench]]
+name = "send_recv"
+harness = false
