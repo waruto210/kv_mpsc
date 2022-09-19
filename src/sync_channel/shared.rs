@@ -8,6 +8,13 @@ use crate::unwrap_ok_or;
 use std::fmt::Debug;
 use std::sync::{Condvar, Mutex, MutexGuard};
 
+// it's safe here because all operations on rc will
+// protect by the Mutex
+#[allow(unsafe_code)]
+unsafe impl<K: Key, V> Send for Shared<K, V> {}
+#[allow(unsafe_code)]
+unsafe impl<K: Key, V> Sync for Shared<K, V> {}
+
 /// shared state between senders and receiver
 #[derive(Debug)]
 pub struct Shared<K: Key, V> {

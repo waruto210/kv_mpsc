@@ -18,6 +18,14 @@ use tokio::sync::Notify;
 #[cfg(feature = "profile")]
 use tokio::time::Duration;
 
+// it's safe here because all operations on rc will
+// protect by the Mutex
+#[allow(unsafe_code)]
+unsafe impl<K: Key, V> Send for Shared<K, V> {}
+#[cfg(not(feature = "profile"))]
+#[allow(unsafe_code)]
+unsafe impl<K: Key, V> Sync for Shared<K, V> {}
+
 /// shared state between senders and receiver
 #[derive(Debug)]
 pub struct Shared<K: Key, V> {
