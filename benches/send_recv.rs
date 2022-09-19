@@ -179,8 +179,8 @@ async fn async_with_conflict() {
             }
             Err(e) => match e {
                 RecvError::AllConflict => {
-                    while let Some(msg) = msgs.pop() {
-                        drop(msg);
+                    if !msgs.is_empty() {
+                        msgs.remove(0);
                     }
                 }
                 RecvError::Disconnected => {
@@ -214,10 +214,10 @@ pub fn async_send_recv(c: &mut Criterion) {
         .worker_threads(8)
         .build()
         .unwrap();
-    group.bench_function("tokio mpsc", |b| b.to_async(&rt).iter(tokio_mpsc));
-    group.bench_function("async kv_mpsc no conflict", |b| {
-        b.to_async(&rt).iter(async_no_conflict)
-    });
+    // group.bench_function("tokio mpsc", |b| b.to_async(&rt).iter(tokio_mpsc));
+    // group.bench_function("async kv_mpsc no conflict", |b| {
+    //     b.to_async(&rt).iter(async_no_conflict)
+    // });
     group.bench_function("async kv_mpsc with conflict", |b| {
         b.to_async(&rt).iter(async_with_conflict)
     });
